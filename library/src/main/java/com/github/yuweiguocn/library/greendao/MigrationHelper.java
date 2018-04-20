@@ -186,22 +186,27 @@ public final class MigrationHelper {
             if (!isTableExists(db, true, tempTableName)) {
                 continue;
             }
-
             try {
                 // get all columns from tempTable, take careful to use the columns list
-                List<String> columns = getColumns(db, tempTableName);
-                ArrayList<String> properties = new ArrayList<>(columns.size());
+                List<String> tempTableColumns = getColumns(db, tempTableName);
+                ArrayList<String> properties = new ArrayList<>(tempTableColumns.size());
+                printlListLog(properties);
                 for (int j = 0; j < daoConfig.properties.length; j++) {
-                    String columnName = daoConfig.properties[j].columnName;
-                    if (columns.contains(columnName)) {
+                    Property property = daoConfig.properties[j];
+                    String columnName = property.columnName;
+                    if (tempTableColumns.contains(columnName)) {
                         properties.add("`" + columnName + "`");
+                    } else {
+                        printLog("not contains columnName : " + columnName);
+                        properties.add("`" + columnName + "`");
+                        // 如果临时表中没有新表中的列，则在临时表中写入这一列
+                        createNewColumnInTempTable(db, tempTableName, tableName, property.columnName, property.type);
                     }
                 }
                 if (properties.size() > 0) {
                     final String columnSQL = TextUtils.join(",", properties);
-
                     StringBuilder insertTableStringBuilder = new StringBuilder();
-                    insertTableStringBuilder.append("REPLACE INTO ").append(tableName).append(" (");
+                    insertTableStringBuilder.append("INSERT OR REPLACE INTO  ").append(tableName).append(" (");
                     insertTableStringBuilder.append(columnSQL);
                     insertTableStringBuilder.append(") SELECT ");
                     insertTableStringBuilder.append(columnSQL);
@@ -218,6 +223,48 @@ public final class MigrationHelper {
             }
         }
     }
+	
+	    private static void createNewColumnInTempTable(Database db, String tempTableName, String newTableName,
+                                                   String columnName, Class<?> columnClassType) {
+        Cursor cursor = null;
+        try {
+            cursor = db.rawQuery("SELECT " + columnName + " FROM " + newTableName, null);
+            if (null != cursor && cursor.getColumnCount() > 0) {
+                Object value = cursor.getExtras().get(columnName);
+                String alertTableType = "TEXT";
+                StringBuilder alertTableStringBuilder = new StringBuilder();
+                alertTableStringBuilder.append("ALTER TABLE  ").append(tempTableName);
+                alertTableStringBuilder.append(" ADD ");
+                alertTableStringBuilder.append(columnName);
+                if (null == value) {
+                    String className = columnClassType.getSimpleName();
+                    if (className.equals("int") || className.equals("long")) {
+                        alertTableType = "INTEGER";
+                        value = 0;
+                    } else if (className.equals("String")) {
+                        value = "";
+                        alertTableType = "TEXT";
+                    } else if (className.equals("float") || className.equals("double")) {
+                        value = 0;
+                        alertTableType = "REAL";
+                    }
+                }
+
+                alertTableStringBuilder.append(" " + alertTableType + " ")
+                        .append(" DEFAULT ")
+                        .append(value).append(";");
+                db.execSQL(alertTableStringBuilder.toString());// 插入列
+            }
+        } catch (Throwable e) {
+            printLog("createNewColumnInTempTable Exception : " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+    }
+
 
     private static List<String> getColumns(Database db, String tableName) {
         List<String> columns = null;
